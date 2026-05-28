@@ -1,0 +1,920 @@
+<?php
+// Database connection
+$conn = new mysqli("localhost", "root", "", "db_socialmedia");
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+// Delete expired stories each time the page loads
+$stmt = $conn->prepare("DELETE FROM tbl_stories WHERE expires_at <= NOW()");
+$stmt->execute();
+$stmt->close();
+?>
+
+<?php
+session_start();
+
+// Database connection
+$conn = new mysqli("localhost", "root", "", "db_socialmedia");
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+$email = $_SESSION['user_email'];
+
+// Fetch user details
+$stmt = $conn->prepare("SELECT id, username FROM user_profiles WHERE email = ?");
+$stmt->bind_param("s", $email);
+$stmt->execute();
+$result = $stmt->get_result();
+$user = $result->fetch_assoc();
+
+$username = $user['username'] ?? '';
+$user_id = $user['id'] ?? 0;
+
+
+// Handle like
+if (isset($_GET['like'])) {
+    $postId = (int)$_GET['like'];
+    $conn->query("UPDATE tbl_post SET likes = likes + 1 WHERE id = $postId");
+    header("Location: ".$_SERVER['PHP_SELF']);
+    exit();
+}
+
+// Handle comment submission
+if (isset($_POST['comment_submit'])) {
+    $post_id = $_POST['post_id'];
+    $comment = $conn->real_escape_string($_POST['comment']);
+    $conn->query("INSERT INTO tbl_comment (post_id, username, comment) VALUES ('$post_id', '$username', '$comment')");
+}
+
+$user_id = $_SESSION['user_id'];
+$sql = "SELECT profile_photo FROM tbl_register WHERE id = $user_id";
+$result = $conn->query($sql);
+
+if ($result && $result->num_rows > 0) {
+    $userData = $result->fetch_assoc();
+    $profile_photo = 'uploads/' . $userData['profile_photo']; // Adjust folder path if needed
+} else {
+    $profile_photo = 'uploads/default.jpg'; // Default image if not found
+}
+
+// Fetch all posts
+$posts = $conn->query("SELECT * FROM tbl_post ORDER BY id DESC");
+
+// Fetch user details from user_profiles
+$stmt = $conn->prepare("SELECT username, bio, email FROM user_profiles WHERE email = ?");
+if (!$stmt) {
+    die("Error in query preparation: " . $conn->error);
+}
+$stmt->bind_param("s", $email);
+$stmt->execute();
+$result = $stmt->get_result();
+
+if ($result->num_rows > 0) {
+    $user = $result->fetch_assoc();
+} else {
+    echo "User profile not found.";
+    exit();
+}
+$sql = "SELECT s.*, u.username, u.profile_photo 
+        FROM tbl_stories s
+        JOIN tbl_register u ON s.user_id = u.id
+        WHERE s.expires_at > NOW()
+        ORDER BY s.created_at DESC";
+
+$result = $conn->query($sql);
+// SQL to delete expired stories
+$sql = "DELETE FROM tbl_stories WHERE expires_at <= NOW()";
+
+// Execute the query
+if ($conn->query($sql) === TRUE) {
+    echo "Expired stories deleted successfully.";
+} else {
+    echo "Error deleting expired stories: " . $conn->error;
+}
+
+// Fetch username and check subscription status
+$stmt = $conn->prepare("SELECT username, email FROM user_profiles WHERE email = ?");
+$stmt->bind_param("s", $email);
+$stmt->execute();
+$result = $stmt->get_result();
+$user = $result->fetch_assoc();
+$username = $user['username'] ?? '';
+$email = $user['email'] ?? '';
+
+// Check if the user is subscribed
+$is_subscribed = false;
+if ($username) {
+    $sub_stmt = $conn->prepare("SELECT id FROM tbl_subscription WHERE username = ?");
+    $sub_stmt->bind_param("s", $username);
+    $sub_stmt->execute();
+    $sub_result = $sub_stmt->get_result();
+    $is_subscribed = $sub_result->num_rows > 0;
+    $sub_stmt->close();
+}
+
+?>
+
+<?php
+// Database connection
+$conn = new mysqli("localhost", "root", "", "db_socialmedia");
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+// Check if user is logged in
+if (!isset($_SESSION['username']) || !isset($_SESSION['user_id'])) {
+    die("User not logged in!");
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['files']) && isset($_POST['caption'])) {
+    $username = $_SESSION['username']; // Assuming you're storing username in session
+    $user_id = $_SESSION['user_id'];   // Assuming user_id is also stored in session
+    $caption = $conn->real_escape_string($_POST['caption']);
+
+    $uploaded_files = [];
+
+    foreach ($_FILES['files']['tmp_name'] as $key => $tmp_name) {
+        $file_name = basename($_FILES['files']['name'][$key]);
+        $target_dir = "uploads/";
+        $target_file = $target_dir . time() . "_" . $file_name;
+
+        if (move_uploaded_file($tmp_name, $target_file)) {
+            $uploaded_files[] = basename($target_file);
+        }
+    }
+
+    if (!empty($uploaded_files)) {
+        $filenames_str = implode(',', $uploaded_files);
+        $stmt = $conn->prepare("INSERT INTO tbl_post (username, user_id, filename, caption, likes) VALUES (?, ?, ?, ?, 0)");
+        $stmt->bind_param("siss", $username, $user_id, $filenames_str, $caption);
+
+        if ($stmt->execute()) {
+            echo "<script>alert('Post uploaded successfully!'); window.location.href='feed.php';</script>";
+        } else {
+            echo "Error: " . $stmt->error;
+        }
+    } else {
+        echo "File upload failed!";
+    }
+}
+?>
+<?php
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    // Get the search input from the form
+    $search_input = trim($_POST['search_input']);
+
+    // Validate the input
+    if (!empty($search_input)) {
+        // Prepare the SQL statement to prevent SQL injection
+        $stmt = $conn->prepare("SELECT username FROM user_profiles WHERE username = ?");
+        $stmt->bind_param("s", $search_input);
+        
+        // Execute the statement
+        $stmt->execute();
+        
+        // Store the result
+        $stmt->store_result();
+        
+        // Check if any user was found
+        if ($stmt->num_rows > 0) {
+            // Fetch the username
+            $stmt->bind_result($searched_username);
+            $stmt->fetch();
+            
+            // Redirect to the searched user's timeline
+            header("Location: timeline.php?user=" . urlencode($searched_username));
+            exit();
+        } else {
+            // User not found, handle accordingly
+            echo "User  not found.";
+        }
+        
+        // Close the statement
+        $stmt->close();
+    } else {
+        echo "Please enter a username to search.";
+    }
+}
+
+// Close the database connection
+$conn->close();
+?>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Favicon -->
+    <link href="./socialminds/assets/images/favicon.png" rel="icon" type="image/png">
+
+    <!-- title and description-->
+    <title>Socialite</title>
+ 
+   
+    <!-- css files -->
+    <link rel="stylesheet" href="./socialminds/assets/css/tailwind.css">
+    <link rel="stylesheet" href="./socialminds/assets/css/style.css"> 
+	<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+	
+ <style>
+	#search--box {
+    position: relative; /* Ensure relative positioning */
+    z-index: 50; /* Higher than other elements */
+}
+
+#searchResults {
+    position: absolute;
+    top: 100%; /* Place below the search box */
+    left: 0;
+    z-index: 100; /* Ensure it's above everything */
+    background-color: white; /* Ensure it's visible */
+    width: 100%; /* Full width */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+        .popup-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000; /* Ensure it appears above the slider */
+}
+
+.popup-content {
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    min-width: 300px;
+    max-width: 90%;
+    text-align: center;
+    position: relative;
+}
+
+.close-btn {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    cursor: pointer;
+}
+  </style>
+<style>
+.stories {
+    display: flex;
+    overflow-x: auto;
+    gap: 16px;
+    padding: 10px;
+    white-space: nowrap;
+}
+
+.story {
+    flex: 0 0 auto;
+    width: 200px;
+    border: 1px solid #ccc;
+    border-radius: 12px;
+    padding: 10px;
+    background: #f9f9f9;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    text-align: center;
+}
+.story img, .story video {
+    width: 100%;
+    border-radius: 8px;
+}
+</style>
+
+  
+    
+    <!-- google font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700;800&amp;display=swap" rel="stylesheet">
+	
+</head>
+<body>
+ 
+    <div id="wrapper">
+
+        <!-- header -->
+        <header class="z-[100] h-[--m-top] fixed top-0 left-0 w-full flex items-center bg-white/80 sky-50 backdrop-blur-xl border-b border-slate-200 dark:bg-dark2 dark:border-slate-800">
+
+            <div class="flex items-center w-full xl:px-6 px-2 max-lg:gap-10">
+
+                <div class="2xl:w-[--w-side] lg:w-[--w-side-sm]">
+
+                    <!-- left -->
+                    <div class="flex items-center gap-1"> 
+
+                        <!-- icon menu -->
+                        <button uk-toggle="target: #site__sidebar ; cls :!-translate-x-0"
+                                class="flex items-center justify-center w-8 h-8 text-xl rounded-full hover:bg-gray-100 xl:hidden dark:hover:bg-slate-600 group"> 
+                                <ion-icon name="menu-outline" class="text-2xl group-aria-expanded:hidden"></ion-icon>
+                                <ion-icon name="close-outline" class="hidden text-2xl group-aria-expanded:block"></ion-icon>
+                        </button>
+                        <div id="logo">
+                            <a href="feed.php"> 
+                                <img src="./socialminds/assets/images/logo.png" alt="" class="w-28 md:block hidden dark:!hidden">
+                                <img src="./socialminds/assets/images/logo-light.png" alt="" class="dark:md:block hidden">
+                                <img src="./socialminds/assets/images/logo-mobile.png" class="hidden max-md:block w-20 dark:!hidden" alt="">
+                                <img src="./socialminds/assets/images/logo-mobile-light.png" class="hidden dark:max-md:block w-20" alt="">
+                            </a>
+                        </div>
+                         
+                    </div>
+
+                </div>
+                <div class="flex-1 relative">
+
+                    <div class="max-w-[1220px] mx-auto flex items-center">
+                        
+                       <div id="searchWrapper" class="relative">
+    <!-- Search Box -->
+    <div id="search--box" class="xl:w-[680px] sm:w-96 relative rounded-xl overflow-hidden z-50 bg-secondery max-md:hidden w-screen left-0 max-sm:fixed max-sm:top-2 dark:!bg-white/5">
+        <ion-icon name="search" class="absolute left-4 top-1/2 -translate-y-1/2"></ion-icon>
+        <input type="text" id="searchInput" placeholder="Search Friends..." class="w-full !pl-10 !font-normal !bg-transparent h-12 !text-sm">
+    </div>
+
+    <!-- Search Results Dropdown -->
+    <div id="searchResults" class="hidden absolute z-50 bg-white dark:bg-dark3 w-screen sm:w-96 p-2 rounded-lg shadow-lg mt-2">
+        <div id="resultsContainer"></div>
+    </div>
+</div>
+
+
+<script>
+document.getElementById("resultsContainer").addEventListener("click", function(event) {
+    let link = event.target.closest("a"); // Ensure we catch clicks on inner elements
+    if (link) {
+        event.preventDefault();
+        window.location.href = link.href;
+    }
+});
+
+
+document.getElementById("searchInput").addEventListener("keyup", function() {
+    let query = this.value.trim(); // Remove extra spaces
+
+    if (query.length > 2) {
+        let xhr = new XMLHttpRequest();
+        xhr.open("GET", "search.php?q=" + encodeURIComponent(query), true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                document.getElementById("resultsContainer").innerHTML = xhr.responseText;
+                document.getElementById("searchResults").classList.remove("hidden");
+
+                // Add onerror fallback for all images inside resultsContainer
+                document.querySelectorAll("#resultsContainer img").forEach(function(img) {
+                    img.onerror = function() {
+                        this.onerror = null; // Avoid infinite loop
+                        this.src = "uploads/default.png";
+                    };
+                });
+            }
+        };
+        xhr.send();
+    } else {
+        document.getElementById("searchResults").classList.add("hidden");
+    }
+});
+</script>
+
+
+
+
+                        <!-- header icons -->
+                        <div class="flex items-center sm:gap-4 gap-2 absolute right-5 top-1/2 -translate-y-1/2 text-black">
+                            <!-- create -->
+                            
+                                    <!-- slider -->
+                  
+    
+                                    <!-- list -->
+                                    
+                                <!-- footer -->
+                                <a href="#">
+                                    <div class="text-center py-4 border-t border-slate-100 text-sm font-medium text-blue-600 dark:text-white dark:border-gray-600">  View Notifications </div>
+                                </a>
+        
+                                <div class="w-3 h-3 absolute -top-1.5 right-3 bg-white border-l border-t rotate-45 max-md:hidden dark:bg-dark3 dark:border-transparent"></div>
+                            </div>
+
+                            <!-- messages -->
+                            
+        
+                            <!-- profile -->
+                            <div  class="rounded-full relative bg-secondery cursor-pointer shrink-0">
+                               <?php
+// Connect to your database
+$conn = new mysqli("localhost", "root", "", "db_socialmedia");
+
+// Get the logged-in user ID
+
+$user_id = $_SESSION['user_id']; // assuming this is set during login
+
+// Fetch the profile image from the database
+$sql = "SELECT profile_photo FROM tbl_register WHERE id = '$user_id'";
+$result = $conn->query($sql);
+
+if ($result && $result->num_rows > 0) {
+    $row = $result->fetch_assoc();
+    $profilephoto = $row['profile_photo'];
+
+    // Set default image if empty
+    if (empty($profilephoto)) {
+        $profilephoto = "default.jpg";
+    }
+} else {
+    $profilephoto = "default.jpg"; // fallback image
+}
+?>
+
+<!-- HTML part to display image -->
+<img src="./socialminds/assets/images/favicon.png" class="logo">
+
+                            </div>
+                            <div  class="hidden bg-white rounded-lg drop-shadow-xl dark:bg-slate-700 w-64 border2"
+                                uk-drop="offset:6;pos: bottom-right;animate-out: true; animation: uk-animation-scale-up uk-transform-origin-top-right ">
+                                
+                                <a href="timeline.php">
+    <div class="p-4 py-5 flex items-center gap-4">
+        
+        <div class="flex-1">
+            <h3 class="md:text-xl text-base font-semibold text-black dark:text-white">
+                <?php echo htmlspecialchars($username); ?>
+                <?php if ($is_subscribed): ?>
+                    <span title="Verified" style="color: #1DA1F2;">✔️</span> <!-- Blue tick emoji -->
+                <?php endif; ?>
+            </h3>
+            <p class="text-sm text-blue-600 mt-1 font-normal">
+                <?php echo htmlspecialchars($user['email'] ?? 'Guest'); ?>
+            </p>
+        </div>
+    </div>
+</a>
+
+
+                                <hr class="dark:border-gray-600/60">
+
+                                <nav class="p-2 text-sm text-black font-normal dark:text-white">
+                                    <a href="upgrade.php">
+                                        <div class="flex items-center gap-2.5 hover:bg-secondery p-2 px-2.5 rounded-md dark:hover:bg-white/10 text-blue-600">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                                            </svg>
+                                            Upgrade To Premium 
+                                        </div>
+                                    </a>  
+                                    <a href="setting.php">
+                                        <div class="flex items-center gap-2.5 hover:bg-secondery p-2 px-2.5 rounded-md dark:hover:bg-white/10"> 
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z" />
+                                            </svg>
+                                            My Billing 
+                                        </div>
+                                    </a>
+                                    <a href="setting.php">
+                                        <div class="flex items-center gap-2.5 hover:bg-secondery p-2 px-2.5 rounded-md dark:hover:bg-white/10"> 
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M10.34 15.84c-.688-.06-1.386-.09-2.09-.09H7.5a4.5 4.5 0 110-9h.75c.704 0 1.402-.03 2.09-.09m0 9.18c.253.962.584 1.892.985 2.783.247.55.06 1.21-.463 1.511l-.657.38c-.551.318-1.26.117-1.527-.461a20.845 20.845 0 01-1.44-4.282m3.102.069a18.03 18.03 0 01-.59-4.59c0-1.586.205-3.124.59-4.59m0 9.18a23.848 23.848 0 018.835 2.535M10.34 6.66a23.847 23.847 0 008.835-2.535m0 0A23.74 23.74 0 0018.795 3m.38 1.125a23.91 23.91 0 011.014 5.395m-1.014 8.855c-.118.38-.245.754-.38 1.125m.38-1.125a23.91 23.91 0 001.014-5.395m0-3.46c.495.413.811 1.035.811 1.73 0 .695-.316 1.317-.811 1.73m0-3.46a24.347 24.347 0 010 3.46" />
+                                            </svg>
+                                            Advatacing
+                                        </div>
+                                    </a>
+                                    <a href="setting.php">
+                                        <div class="flex items-center gap-2.5 hover:bg-secondery p-2 px-2.5 rounded-md dark:hover:bg-white/10"> 
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            </svg>
+                                            My Account
+                                        </div>
+                                    </a>   
+                                    <hr class="-mx-2 my-2 dark:border-gray-600/60">
+                                    <a href="form-login.php">
+                                        <div class="flex items-center gap-2.5 hover:bg-secondery p-2 px-2.5 rounded-md dark:hover:bg-white/10"> 
+                                            <svg class="w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                                            </svg>
+                                            Log Out 
+                                        </div>
+                                    </a>
+    
+                                </nav>
+
+                            </div> 
+
+                            <div class="flex items-center gap-2 hidden">
+        
+                                <img src="./socialminds/assets/images/avatars/avatar-2.jpg" alt="" class="w-9 h-9 rounded-full shadow">
+        
+                                <div class="w-20 font-semibold text-gray-600"> Hamse </div>
+        
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                                </svg> 
+        
+                            </div> 
+        
+                        </div>
+
+                    </div> 
+
+                </div>
+
+            </div>
+
+        </header>
+    
+        <!-- sidebar -->
+        <div id="site__sidebar" class="fixed top-0 left-0 z-[99] pt-[--m-top] overflow-hidden transition-transform xl:duration-500 max-xl:w-full max-xl:-translate-x-full">
+
+            <!-- sidebar inner -->
+            <div class="p-2 max-xl:bg-white shadow-sm 2xl:w-72 sm:w-64 w-[80%] h-[calc(100vh-64px)] relative z-30 max-lg:border-r dark:max-xl:!bg-slate-700 dark:border-slate-700">
+        
+                <div class="pr-4" data-simplebar>
+
+                    <nav id="side">
+                    
+                        <ul>
+                            <li class="active">
+                                <a href="feed.php">
+                                    <img src="./socialminds/assets/images/icons/home.png" alt="feeds" class="w-6">
+                                    <span> Feed </span> 
+                                </a>
+                            </li>
+                            <li>
+                                <a href="messages.php">
+                                    <img src="./socialminds/assets/images/icons/message.png" alt="messages" class="w-5">
+                                    <span> messages </span> 
+                                </a>
+                            </li> 
+                            <li>
+                                <a href="video.php">
+                                    <img src="./socialminds/assets/images/icons/video.png" alt="messages" class="w-6">
+                                    <span> video </span> 
+                                </a>
+                            </li>
+                            <li>
+                                <a href="event-2.php">
+                                    <img src="./socialminds/assets/images/icons/event.png" alt="messages" class="w-6">
+                                    <span> event </span> 
+                                </a>
+                            </li>
+                            <li>
+                                <a href="groups.php">
+                                    <img src="./socialminds/assets/images/icons/group.png" alt="groups" class="w-6">
+                                    <span> Groups </span> 
+                                </a>
+                            </li>
+                            <li>
+                                <a href="market.php">
+                                    <img src="./socialminds/assets/images/icons/market.png" alt="market" class="w-7 -ml-1">
+                                    <span> market </span> 
+                                </a>
+                            </li> 
+                           
+                           
+                    </ul>
+                        
+                        
+        
+                    </nav>
+        
+                    
+        
+                    <nav id="side" class="font-medium text-sm text-black border-t pt-3 mt-2 dark:text-white dark:border-slate-800">
+                        <div class="px-3 pb-2 text-sm font-medium"> 
+                            <div class="text-black dark:text-white">Pages</div> 
+                        </div>
+        
+                        <ul class="mt-2 -space-y-2" 
+                            uk-nav="multiple: true">
+                
+                            <li>
+                                <a href="setting.php"> 
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    </svg>
+                                    <span> Setting </span>                  
+                                </a>
+                            </li>
+                            
+                        
+                        </ul>
+        
+                    </nav>
+                
+
+                    <div class="text-xs font-medium flex flex-wrap gap-2 gap-y-0.5 p-2 mt-2">
+                        <a href="#" class="hover:underline">About</a>
+                        <a href="#" class="hover:underline">Blog </a>
+                        <a href="#" class="hover:underline">Careers</a>
+                        <a href="#" class="hover:underline">Support</a>
+                        <a href="#" class="hover:underline">Contact Us </a>
+                        <a href="#" class="hover:underline">Developer</a>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- sidebar overly -->
+            <div id="site__sidebar__overly" 
+                class="absolute top-0 left-0 z-20 w-screen h-screen xl:hidden backdrop-blur-sm"
+                uk-toggle="target: #site__sidebar ; cls :!-translate-x-0"> 
+            </div>
+        </div>
+
+        <!-- main contents -->
+        <main id="site__main" class="2xl:ml-[--w-side]  xl:ml-[--w-side-sm] p-2.5 h-[calc(100vh-var(--m-top))] mt-[--m-top]">
+		<?php
+$loggedInUserId = $_SESSION['user_id']; // Ensure the user is logged in
+
+// Database connection
+$host = "localhost";
+$user = "root";
+$password = "";
+$dbname = "db_socialmedia";
+
+$conn = new mysqli($host, $user, $password, $dbname);
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+function timeAgo($datetime, $full = false) {
+    $now = new DateTime;
+    $ago = new DateTime($datetime);
+    $diff = $now->diff($ago);
+
+    $weeks = floor($diff->d / 7);
+    $days = $diff->d % 7;
+
+    $string = [
+        'y' => $diff->y . ' year' . ($diff->y != 1 ? 's' : ''),
+        'm' => $diff->m . ' month' . ($diff->m != 1 ? 's' : ''),
+        'w' => $weeks . ' week' . ($weeks != 1 ? 's' : ''),
+        'd' => $days . ' day' . ($days != 1 ? 's' : ''),
+        'h' => $diff->h . ' hour' . ($diff->h != 1 ? 's' : ''),
+        'i' => $diff->i . ' minute' . ($diff->i != 1 ? 's' : ''),
+        's' => $diff->s . ' second' . ($diff->s != 1 ? 's' : ''),
+    ];
+
+    // Remove any zero units
+    foreach ($string as $k => $v) {
+        if (str_starts_with($v, '0')) {
+            unset($string[$k]);
+        }
+    }
+
+    if (!$full) {
+        $string = array_slice($string, 0, 1);
+    }
+
+    return $string ? implode(', ', $string) . ' ago' : 'just now';
+}
+
+
+
+$currentTime = date('Y-m-d H:i:s');
+
+// Fetch stories with usernames from tbl_register
+$sql = "SELECT s.*, r.username 
+        FROM tbl_stories s
+        JOIN tbl_register r ON s.user_id = r.id
+        WHERE 
+            (s.visibility = 'everyone' 
+             OR (s.visibility = 'only_me' AND s.user_id = ?))
+            AND (s.expires_at IS NULL OR s.expires_at > ?)
+        ORDER BY s.created_at DESC";
+
+$stmt = $conn->prepare($sql);
+$stmt->bind_param("is", $loggedInUserId, $currentTime);
+$stmt->execute();
+$result = $stmt->get_result();
+
+// Styling for horizontal layout
+echo "
+<style>
+.stories {
+    display: flex;
+    overflow-x: auto;
+    gap: 16px;
+    padding: 10px;
+    white-space: nowrap;
+}
+.story {
+    flex: 0 0 auto;
+    width: 200px;
+    border: 1px solid #ccc;
+    border-radius: 12px;
+    padding: 10px;
+    background: #f9f9f9;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    text-align: center;
+}
+.story img, .story video {
+    width: 100%;
+    border-radius: 8px;
+}
+</style>
+";
+
+if ($result->num_rows > 0) {
+    echo "<div class='stories'>";
+    while ($row = $result->fetch_assoc()) {
+        echo "<div class='story'>";
+
+$timeAgo = timeAgo($row['created_at']);
+echo "<p><strong>Posted by:</strong> " . htmlspecialchars($row['username']) . "<br><small>$timeAgo</small></p>";
+
+        // Show media based on type
+        switch ($row['media_type']) {
+            case 'image':
+                echo "<img src='" . htmlspecialchars($row['media_path']) . "' alt='Story Image'><br>";
+                break;
+            case 'video':
+                echo "<video controls>
+                        <source src='" . htmlspecialchars($row['media_path']) . "' type='video/mp4'>
+                        Your browser does not support the video tag.
+                      </video><br>";
+                break;
+            case 'text':
+                echo "<p>" . nl2br(htmlspecialchars($row['content'])) . "</p>";
+                break;
+        }
+
+        echo "</div>";
+    }
+    echo "</div>";
+} else {
+    echo "<p>No stories available.</p>";
+}
+
+?>
+
+
+    <!-- Slider Script -->
+    <script>
+	
+        const slider = document.getElementById("storySlider");
+        const nextBtn = document.getElementById("nextBtn");
+        const prevBtn = document.getElementById("prevBtn");
+        const totalItems = slider.children.length;
+        const itemsPerSlide = 4;
+        let currentIndex = 0;
+
+        function updateSlider() {
+            const slideWidth = slider.clientWidth;
+            slider.style.transform = `translateX(-${(slideWidth / itemsPerSlide) * currentIndex}px)`;
+        }
+
+        nextBtn.addEventListener("click", () => {
+            if ((currentIndex + 1) * itemsPerSlide < totalItems) {
+                currentIndex++;
+                updateSlider();
+            }
+        });
+
+        prevBtn.addEventListener("click", () => {
+            if (currentIndex > 0) {
+                currentIndex--;
+                updateSlider();
+            }
+        });
+
+        // Optional: Enable auto show/hide of arrows on hover
+        slider.parentElement.addEventListener("mouseenter", () => {
+            nextBtn.style.display = 'block';
+            prevBtn.style.display = 'block';
+        });
+        slider.parentElement.addEventListener("mouseleave", () => {
+            nextBtn.style.display = 'none';
+            prevBtn.style.display = 'none';
+        });
+    </script>
+
+
+
+            <!-- timeline -->
+            <div class="lg:flex 2xl:gap-16 gap-12 max-w-[1065px] mx-auto"  id="js-oversized">
+
+                <div class="max-w-[680px] mx-auto">
+
+                        
+                        <!--  post image-->
+                        <div class="bg-white rounded-xl shadow-sm text-sm font-medium border1 dark:bg-dark2 p-4">
+
+    <!-- Upload Form -->
+    <form action="feed.php" method="post" enctype="multipart/form-data" class="mb-4">
+        <input type="file" name="files[]" multiple required><br><br>
+        <input type="text" name="caption" placeholder="Add a caption" required class="w-full p-2 border rounded"><br><br>
+        <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+
+    <!-- Display Posts -->
+    <div class="posts">
+        <?php while ($post = $posts->fetch_assoc()): ?>
+            <div class="card mb-4 p-3 border rounded shadow-sm">
+                <?php
+                $medias = explode(',', $post['filename']);
+                foreach ($medias as $media) {
+                    $fileExtension = pathinfo($media, PATHINFO_EXTENSION);
+                    if (in_array($fileExtension, ['mp4', 'mov', 'avi'])) {
+                        echo "<video controls class='w-40 h-40 mb-2'><source src='uploads/$media' type='video/$fileExtension'></video>";
+                    } else {
+                        echo "<img src='uploads/$media' class='w-40 h-40 object-cover mb-2 rounded' alt='Post Image'>";
+                    }
+                }
+                ?>
+                <div class="card-body mt-2">
+                    <h5 class="card-title">By: <?php echo htmlspecialchars($post['username']); ?></h5>
+                    <p class="card-text">Caption: <?php echo htmlspecialchars($post['caption']); ?></p>
+                    <p class="card-text">Likes: <?php echo $post['likes']; ?></p>
+                    <a href="?like=<?php echo $post['id']; ?>" class="btn btn-success btn-sm mb-2">Like</a>
+
+                    <!-- Display comments -->
+                    <div class="comments bg-gray-100 p-2 rounded mb-2">
+                        <strong>Comments:</strong><br>
+                        <?php
+                        $post_id = $post['id'];
+                        $comments = $conn->query("SELECT * FROM tbl_comment WHERE post_id = $post_id ORDER BY created_at DESC");
+                        while ($c = $comments->fetch_assoc()):
+                        ?>
+                            <div class="text-sm mb-1"><b><?php echo htmlspecialchars($c['username']); ?>:</b> <?php echo htmlspecialchars($c['comment']); ?></div>
+                        <?php endwhile; ?>
+                    </div>
+
+                    <!-- Comment Form -->
+                    <form method="post" class="mt-2">
+                        <input type="hidden" name="post_id" value="<?php echo $post['id']; ?>">
+                        <input type="text" name="comment" placeholder="Add a comment..." required class="w-full p-1 border rounded text-sm">
+                        <button type="submit" name="comment_submit" class="btn btn-sm btn-outline-primary mt-1">Comment</button>
+                    </form>
+                </div>
+            </div>
+      
+    </div>
+</div> 
+                            
+                            <!-- comments -->
+                            
+								<?php
+								
+								?>
+
+                                
+                  
+        <?php endwhile; ?>
+    </div>
+    </div>
+                     
+
+                       
+                
+
+ 
+
+    <!-- Javascript  -->
+    <script src="./socialminds/assets/js/uikit.min.js"></script>
+    <script src="./socialminds/assets/js/simplebar.js"></script>
+    <script src="./socialminds/assets/js/script.js"></script>
+ 
+ 
+    <!-- Ion icon -->
+    <script type="module" src="../../unpkg.com/ionicons%405.5.2/dist/ionicons/ionicons.esm.js"></script>
+    <script nomodule src="../../unpkg.com/ionicons%405.5.2/dist/ionicons/ionicons.js"></script>
+	<script type="module" src="https://cdn.jsdelivr.net/npm/ionicons@latest/dist/ionicons.esm.js"></script>
+
+ 	<script>
+      document.getElementById('openPopup').addEventListener('click', function (event) {
+    event.stopPropagation(); // Prevent slider clicks from affecting the popup
+    document.getElementById('popupOverlay').style.display = 'flex';
+});
+
+// Close popup when clicking outside of it
+document.getElementById('popupOverlay').addEventListener('click', function (event) {
+    if (event.target === this) {
+        this.style.display = 'none';
+    }
+});
+
+// Close button functionality
+document.getElementById('closePopup').addEventListener('click', function () {
+    document.getElementById('popupOverlay').style.display = 'none';
+});
+
+
+    </script>
+
+</body>
+
+
+</html>
